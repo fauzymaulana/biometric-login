@@ -9,5 +9,5 @@ Aplikasi sample ini untuk menunjukkan login menggunakan email/password dan biome
 <img src="screenshoots/login_email_password.gif" alt="Demo 1" width="200">
 
 - Login menggunakan biometric
-  <img src="screenshoots/login_biometric.gif" alt="Demo 1" width="200">
+<img src="screenshoots/login_biometric.gif" alt="Demo 1" width="200">
 ---
