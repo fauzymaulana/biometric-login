@@ -1,5 +1,7 @@
 package com.papero.biometric.presentation
 
+import android.content.Context
+import android.content.Intent
 import android.os.Bundle
 import android.view.View
 import android.view.inputmethod.EditorInfo
@@ -9,14 +11,21 @@ import android.widget.TextView
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
+import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.widget.doAfterTextChanged
 import androidx.lifecycle.lifecycleScope
 import com.papero.biometric.R
+import com.papero.biometric.domain.usecase.cryptograph.CryptographyManager
+import com.papero.biometric.domain.usecase.cryptograph.CryptographyManagerImpl
+import com.papero.biometric.presentation.biometric.EnableBiometricLoginActivity
 import com.papero.biometric.presentation.state.FailedLoginState
 import com.papero.biometric.presentation.state.SuccessLoginState
+import com.papero.biometric.utilities.BiometricPromptUtils
+import com.papero.biometric.utilities.CIPHERTEXT_WRAPPER
+import com.papero.biometric.utilities.SHARED_PREFS_FILENAME
 import com.papero.biometric.utilities.SampleAppUser
 
 class MainActivity : AppCompatActivity(), View.OnClickListener {
@@ -28,6 +37,16 @@ class MainActivity : AppCompatActivity(), View.OnClickListener {
     private var txtProgress: TextView? = null
 
     private val viewModel by viewModels<LoginViewModel>()
+
+    private lateinit var biometricPrompt: BiometricPrompt
+    private val cryptographyManager = CryptographyManagerImpl()
+    private val ciphertextWrapper
+        get() = cryptographyManager.getCiphertextWrapperFromSharedPrefs(
+                applicationContext,
+                SHARED_PREFS_FILENAME,
+                Context.MODE_PRIVATE,
+                CIPHERTEXT_WRAPPER
+        )
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -44,6 +63,17 @@ class MainActivity : AppCompatActivity(), View.OnClickListener {
         watcherUsername()
         watcherPassword()
         setupForLoginWithPassword()
+
+        val canAuthenticate = BiometricManager.from(applicationContext).canAuthenticate()
+        if (canAuthenticate == BiometricManager.BIOMETRIC_SUCCESS) {
+            btnUseBiometric?.visibility = View.VISIBLE
+        } else {
+            btnUseBiometric?.visibility = View.INVISIBLE
+        }
+
+        if (ciphertextWrapper == null) {
+            setupForLoginWithPassword()
+        }
     }
 
     private fun initViews() {
@@ -128,12 +158,64 @@ class MainActivity : AppCompatActivity(), View.OnClickListener {
             }
 
             btnUseBiometric?.id -> {
-
+                if (ciphertextWrapper != null) {
+                    showBiometricPromptForDecryption()
+                } else {
+                    startActivity(Intent(this, EnableBiometricLoginActivity::class.java))
+                }
             }
         }
     }
 
     private fun updateApp(successMsg: String) {
         txtProgress?.text = successMsg
+    }
+
+    /**
+     * The logic is kept inside onResume instead of onCreate so that authorizing biometrics takes
+     * immediate effect.
+     */
+    override fun onResume() {
+        super.onResume()
+
+        if (ciphertextWrapper != null) {
+            if (SampleAppUser.fakeToken == null) {
+                showBiometricPromptForDecryption()
+            } else {
+                updateApp(getString(R.string.already_signedin))
+            }
+        }
+    }
+
+    private fun showBiometricPromptForDecryption() {
+        ciphertextWrapper?.let { textWrapper ->
+            val secretKeyName = getString(R.string.secret_key_name)
+            val cipher = cryptographyManager.getInitializedCipherForDecryption(
+                secretKeyName, textWrapper.initializationVector
+            )
+            biometricPrompt =
+                BiometricPromptUtils.createBiometricPrompt(
+                    this,
+                    ::decryptServerTokenFromStorage
+                )
+            val promptInfo = BiometricPromptUtils.createPromptInfo(this)
+            biometricPrompt.authenticate(promptInfo, BiometricPrompt.CryptoObject(cipher))
+        }
+    }
+
+    private fun decryptServerTokenFromStorage(authResult: BiometricPrompt.AuthenticationResult) {
+        ciphertextWrapper?.let { textWrapper ->
+            authResult.cryptoObject?.cipher?.let {
+                val plaintext =
+                    cryptographyManager.decryptData(textWrapper.ciphertext, it)
+                SampleAppUser.fakeToken = plaintext
+                // Now that you have the token, you can query server for everything else
+                // the only reason we call this fakeToken is because we didn't really get it from
+                // the server. In your case, you will have gotten it from the server the first time
+                // and therefore, it's a real token.
+
+                updateApp(getString(R.string.already_signedin))
+            }
+        }
     }
 }
